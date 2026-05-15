@@ -18,36 +18,60 @@ warnings.filterwarnings("ignore")
 # ── Paths ────────────────────────────────────────────────────────────────────
 DATA_DIR   = os.path.join(os.path.dirname(__file__), "..", "data")
 CACHE_DIR  = os.path.join(os.path.dirname(__file__), "..", "models")
-RAW_FILE   = os.path.join(DATA_DIR, "online_retail_II.xlsx")
+RAW_FILE_CSV  = os.path.join(DATA_DIR, "online_retail_II.csv")
+RAW_FILE_XLSX = os.path.join(DATA_DIR, "online_retail_II.xlsx")
 RFM_CACHE  = os.path.join(CACHE_DIR, "rfm.pkl")
 TXN_CACHE  = os.path.join(CACHE_DIR, "transactions.pkl")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
+def _detect_raw_file() -> str:
+    """Return the path to whichever raw file exists (CSV preferred over xlsx)."""
+    if os.path.exists(RAW_FILE_CSV):
+        return RAW_FILE_CSV
+    if os.path.exists(RAW_FILE_XLSX):
+        return RAW_FILE_XLSX
+    raise FileNotFoundError(
+        f"Dataset not found in {DATA_DIR}.\n"
+        "Place 'online_retail_II.csv' (or .xlsx) in the /data folder.\n"
+        "Download from: https://www.kaggle.com/datasets/mashlyn/online-retail-ii-uci"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  Raw load (chunked for memory safety)
 # ─────────────────────────────────────────────────────────────────────────────
-def load_raw(filepath: str = RAW_FILE, sample_frac: float = 1.0) -> pd.DataFrame:
+def load_raw(filepath: str = None, sample_frac: float = 1.0) -> pd.DataFrame:
     """
-    Load the Online Retail II xlsx.  For very large files we read sheet by sheet
-    and concatenate.  Pass sample_frac < 1.0 to work with a random subset.
+    Load the Online Retail II dataset (CSV or xlsx).
+    CSV is read in 50k-row chunks for memory safety.
+    Pass sample_frac < 1.0 to work with a random subset.
     """
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(
-            f"Dataset not found at {filepath}.\n"
-            "Download 'Online Retail II.xlsx' from:\n"
-            "  https://archive.ics.uci.edu/dataset/502/online+retail+ii\n"
-            "and place it in the /data folder."
-        )
+    if filepath is None:
+        filepath = _detect_raw_file()
 
     print(f"[DataLoader] Reading {filepath} …")
-    chunks = []
-    xl = pd.ExcelFile(filepath)
-    for sheet in xl.sheet_names:                          # usually 2 years
-        df_chunk = pd.read_excel(xl, sheet_name=sheet, dtype={"Customer ID": str})
-        chunks.append(df_chunk)
-    df = pd.concat(chunks, ignore_index=True)
+
+    if filepath.endswith(".csv"):
+        chunks = []
+        for chunk in pd.read_csv(
+            filepath,
+            chunksize=50_000,
+            dtype={"Customer ID": str},
+            encoding="utf-8",
+            on_bad_lines="skip",
+        ):
+            chunks.append(chunk)
+        df = pd.concat(chunks, ignore_index=True)
+    else:
+        # xlsx fallback
+        chunks = []
+        xl = pd.ExcelFile(filepath)
+        for sheet in xl.sheet_names:
+            df_chunk = pd.read_excel(xl, sheet_name=sheet, dtype={"Customer ID": str})
+            chunks.append(df_chunk)
+        df = pd.concat(chunks, ignore_index=True)
 
     if sample_frac < 1.0:
         df = df.sample(frac=sample_frac, random_state=42).reset_index(drop=True)
